@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Separator } from '@/components/ui/separator'
-import { RefreshCw, Download, AlertCircle, TrendingUp, Users, Target, CheckCircle } from 'lucide-react'
+import { RefreshCw, Download, AlertCircle, TrendingUp, Users, Target, CheckCircle, Mail, Clock, XCircle, Eye } from 'lucide-react'
 import parseLLMJson from '@/utils/jsonParser'
 import { callAIAgent } from '@/utils/aiAgent'
 import { cn } from '@/lib/utils'
@@ -20,20 +20,42 @@ import { cn } from '@/lib/utils'
 interface TeamMember {
   id: string
   name: string
+  email: string
   activities: string
   mqlCount: number
   status: 'responded' | 'pending' | 'overdue'
   timestamp?: string
+  reminder_sent?: number
 }
 
-interface DashboardInsight {
-  totalMQLs: number
-  responseRate: number
-  averageMQLs: number
-  topPerformer: string
-  nonResponders: string[]
+interface CollectionData {
+  collection_status: string
+  team_data: TeamMember[]
+  response_rate: number
+  total_mql_collected: number
+  non_responders: string[]
+  errors: string[]
+}
+
+interface AggregateMetrics {
+  total_mqls: number
+  team_count: number
+  response_rate: number
+  avg_mql_per_person: number
+  top_performer: string
+  pending_responses: number
+}
+
+interface DashboardData {
+  dashboard_status: string
+  aggregate_metrics: AggregateMetrics
+  individual_activity_cards: TeamMember[]
+  non_responders_list: string[]
   insights: string[]
-  lastUpdated: string
+  metadata: {
+    processing_time: string
+    records_processed: number
+  }
 }
 
 interface CollectionResponse {
@@ -41,9 +63,9 @@ interface CollectionResponse {
   confidence: number
   metadata: {
     processing_time: string
-    messages_sent: number
-    responses_collected: number
-    collection_status: 'initiated' | 'completed'
+    emails_sent: number
+    responses_received: number
+    collection_method: string
   }
 }
 
@@ -53,16 +75,20 @@ interface InsightResponse {
   metadata: {
     processing_time: string
     records_processed: number
-    dashboard_status: 'ready' | 'processing'
+    dashboard_status: string
     total_mqls: number
   }
 }
 
 // Agent functions
-async function callCollectionAgent(prompt: string) {
+async function callCollectionAgent(prompt: string): Promise<CollectionResponse | null> {
   try {
     const response = await callAIAgent(prompt, '68fd262d058210757bf63fc4')
-    const parsed = parseLLMJson(response, {})
+    const parsed = parseLLMJson(response, {
+      result: '',
+      confidence: 0,
+      metadata: { processing_time: '0ms', emails_sent: 0, responses_received: 0, collection_method: 'email' }
+    })
     return parsed as CollectionResponse
   } catch (error) {
     console.error('Collection agent error:', error)
@@ -70,10 +96,14 @@ async function callCollectionAgent(prompt: string) {
   }
 }
 
-async function callInsightsAgent(prompt: string) {
+async function callInsightsAgent(prompt: string): Promise<InsightResponse | null> {
   try {
     const response = await callAIAgent(prompt, '68fd2650be2defc486f4567a')
-    const parsed = parseLLMJson(response, {})
+    const parsed = parseLLMJson(response, {
+      result: '',
+      confidence: 0,
+      metadata: { processing_time: '0ms', records_processed: 0, dashboard_status: 'error', total_mqls: 0 }
+    })
     return parsed as InsightResponse
   } catch (error) {
     console.error('Insights agent error:', error)
@@ -90,12 +120,12 @@ function MetricCard({ label, value, icon: Icon, trend, status }: any) {
   }
 
   return (
-    <Card className="bg-white border-gray-200">
+    <Card className="bg-white border border-gray-200 shadow-sm hover:shadow-md transition-shadow">
       <CardContent className="pt-6">
         <div className="flex items-start justify-between">
           <div className="flex-1">
             <p className="text-sm font-medium text-gray-600">{label}</p>
-            <p className={cn('text-2xl font-bold mt-2', statusColors[status || 'neutral'])}>
+            <p className={cn('text-3xl font-bold mt-2', statusColors[status || 'neutral'])}>
               {value}
             </p>
             {trend && (
@@ -112,48 +142,72 @@ function MetricCard({ label, value, icon: Icon, trend, status }: any) {
   )
 }
 
-function TeamActivityCard({ member, onUpdate }: any) {
+function ActivityCard({ member, onRemind }: any) {
   const statusConfig = {
-    responded: { bg: 'bg-green-50', color: 'text-green-700', label: 'Responded' },
-    pending: { bg: 'bg-amber-50', color: 'text-amber-700', label: 'Pending' },
-    overdue: { bg: 'bg-red-50', color: 'text-red-700', label: 'Overdue' }
+    responded: { bg: 'bg-green-50', color: 'bg-green-100', textColor: 'text-green-700', icon: CheckCircle, label: 'Responded' },
+    pending: { bg: 'bg-amber-50', color: 'bg-amber-100', textColor: 'text-amber-700', icon: Clock, label: 'Pending' },
+    overdue: { bg: 'bg-red-50', color: 'bg-red-100', textColor: 'text-red-700', icon: XCircle, label: 'Overdue' }
   }
 
   const config = statusConfig[member.status]
+  const StatusIcon = config.icon
 
   return (
-    <Card className={cn('border-gray-200', config.bg)}>
+    <Card className={cn('border border-gray-200 shadow-sm', config.bg)}>
       <CardContent className="pt-6">
         <div className="flex items-start justify-between mb-4">
           <div className="flex-1">
-            <h3 className="font-semibold text-gray-900">{member.name}</h3>
-            <Badge className={cn('mt-1', config.color, config.bg)}>
-              {config.label}
-            </Badge>
+            <div className="flex items-center gap-2 mb-2">
+              <h3 className="font-semibold text-gray-900">{member.name}</h3>
+              <Badge className={cn('text-xs', config.color, config.textColor)}>
+                <StatusIcon className="w-3 h-3 mr-1" />
+                {config.label}
+              </Badge>
+            </div>
+            <p className="text-xs text-gray-500">{member.email}</p>
           </div>
           <div className="text-right">
             <p className="text-2xl font-bold text-purple-600">{member.mqlCount}</p>
             <p className="text-xs text-gray-500">MQLs</p>
           </div>
         </div>
+
         <Separator className="my-3" />
-        <p className="text-sm text-gray-700 line-clamp-2">{member.activities}</p>
-        {member.timestamp && (
-          <p className="text-xs text-gray-500 mt-2">Submitted: {member.timestamp}</p>
-        )}
+
+        <div>
+          <p className="text-sm text-gray-700 mb-3">{member.activities || 'No activities reported'}</p>
+          <div className="flex items-center justify-between">
+            {member.timestamp && (
+              <p className="text-xs text-gray-500">Submitted: {member.timestamp}</p>
+            )}
+            {member.status !== 'responded' && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="border-amber-600 text-amber-600 hover:bg-amber-100"
+                onClick={() => onRemind(member.id)}
+              >
+                Remind
+              </Button>
+            )}
+          </div>
+        </div>
       </CardContent>
     </Card>
   )
 }
 
-function NonRespondersList({ members }: any) {
+function NonRespondersList({ members, onRemind }: any) {
   if (members.length === 0) {
     return (
-      <Card className="border-gray-200 bg-green-50">
+      <Card className="border border-gray-200 bg-green-50 shadow-sm">
         <CardContent className="pt-6">
-          <div className="flex items-center gap-2">
-            <CheckCircle className="w-5 h-5 text-green-600" />
-            <p className="text-green-700 font-medium">All team members have responded!</p>
+          <div className="flex items-center gap-3">
+            <CheckCircle className="w-6 h-6 text-green-600 flex-shrink-0" />
+            <div>
+              <p className="font-semibold text-green-700">Perfect! 100% Response Rate</p>
+              <p className="text-sm text-green-600">All team members have submitted their data.</p>
+            </div>
           </div>
         </CardContent>
       </Card>
@@ -161,20 +215,28 @@ function NonRespondersList({ members }: any) {
   }
 
   return (
-    <Card className="border-gray-200 bg-amber-50">
+    <Card className="border border-gray-200 bg-amber-50 shadow-sm">
       <CardHeader>
-        <CardTitle className="text-base flex items-center gap-2">
+        <CardTitle className="text-base flex items-center gap-2 text-amber-900">
           <AlertCircle className="w-5 h-5 text-amber-600" />
-          Action Required
+          Action Required ({members.length})
         </CardTitle>
-        <CardDescription>Team members who haven't responded yet</CardDescription>
+        <CardDescription>Members who haven't responded yet</CardDescription>
       </CardHeader>
       <CardContent>
         <div className="space-y-2">
-          {members.map((name: string) => (
-            <div key={name} className="flex items-center justify-between py-2 border-b border-amber-200 last:border-0">
-              <span className="text-sm font-medium text-gray-700">{name}</span>
-              <Button size="sm" variant="outline" className="border-amber-600 text-amber-600 hover:bg-amber-100">
+          {members.map((member: TeamMember) => (
+            <div key={member.id} className="flex items-center justify-between py-2 px-2 bg-white bg-opacity-50 rounded border border-amber-200 last:border-0">
+              <div>
+                <p className="text-sm font-medium text-gray-900">{member.name}</p>
+                <p className="text-xs text-gray-500">{member.email}</p>
+              </div>
+              <Button
+                size="sm"
+                className="bg-amber-600 hover:bg-amber-700 text-white"
+                onClick={() => onRemind(member.id)}
+              >
+                <Mail className="w-3 h-3 mr-1" />
                 Remind
               </Button>
             </div>
@@ -186,8 +248,21 @@ function NonRespondersList({ members }: any) {
 }
 
 function InsightsSummary({ insights }: any) {
+  if (!insights || insights.length === 0) {
+    return (
+      <Card className="border border-gray-200 shadow-sm">
+        <CardHeader>
+          <CardTitle className="text-base">Key Insights</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-gray-500 text-sm">No insights available yet. Generate dashboard to see analysis.</p>
+        </CardContent>
+      </Card>
+    )
+  }
+
   return (
-    <Card className="border-gray-200">
+    <Card className="border border-gray-200 shadow-sm">
       <CardHeader>
         <CardTitle className="text-base">Key Insights</CardTitle>
       </CardHeader>
@@ -195,7 +270,7 @@ function InsightsSummary({ insights }: any) {
         <div className="space-y-3">
           {insights.map((insight: string, idx: number) => (
             <div key={idx} className="flex gap-3">
-              <TrendingUp className="w-4 h-4 text-purple-600 flex-shrink-0 mt-1" />
+              <TrendingUp className="w-4 h-4 text-purple-600 flex-shrink-0 mt-0.5" />
               <p className="text-sm text-gray-700">{insight}</p>
             </div>
           ))}
@@ -205,99 +280,123 @@ function InsightsSummary({ insights }: any) {
   )
 }
 
-function SidePanel({ onExport }: any) {
+function ExportDialog({ teamData, dashboardData }: any) {
+  const handleExport = () => {
+    const exportData = {
+      timestamp: new Date().toISOString(),
+      dashboard: dashboardData,
+      team_responses: teamData
+    }
+    const element = document.createElement('a')
+    element.setAttribute('href', 'data:text/json;charset=utf-8,' + encodeURIComponent(JSON.stringify(exportData, null, 2)))
+    element.setAttribute('download', `marketing-report-${new Date().toISOString().split('T')[0]}.json`)
+    element.style.display = 'none'
+    document.body.appendChild(element)
+    element.click()
+    document.body.removeChild(element)
+  }
+
+  const handleCopy = () => {
+    const data = JSON.stringify({ teamData, dashboardData }, null, 2)
+    navigator.clipboard.writeText(data)
+  }
+
   return (
-    <Sheet>
-      <SheetTrigger asChild>
+    <Dialog>
+      <DialogTrigger asChild>
         <Button variant="outline" size="icon" className="border-purple-600 text-purple-600 hover:bg-purple-50">
           <Download className="w-4 h-4" />
         </Button>
-      </SheetTrigger>
-      <SheetContent>
-        <SheetHeader>
-          <SheetTitle>Dashboard Options</SheetTitle>
-        </SheetHeader>
-        <div className="space-y-4 mt-6">
-          <div>
-            <h3 className="font-semibold text-gray-900 mb-3">Reminders</h3>
-            <div className="space-y-2">
-              <Alert className="bg-amber-50 border-amber-200">
-                <AlertCircle className="h-4 w-4 text-amber-600" />
-                <AlertDescription className="text-amber-700">
-                  3 team members haven't responded yet
-                </AlertDescription>
-              </Alert>
-            </div>
-          </div>
-          <Separator />
-          <div>
-            <h3 className="font-semibold text-gray-900 mb-3">Export Data</h3>
-            <Button className="w-full bg-purple-600 hover:bg-purple-700 text-white" onClick={onExport}>
-              <Download className="w-4 h-4 mr-2" />
-              Export Report
-            </Button>
-          </div>
+      </DialogTrigger>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Export Report</DialogTitle>
+          <DialogDescription>Download or copy your marketing dashboard report</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4 pt-4">
+          <Button onClick={handleExport} className="w-full bg-purple-600 hover:bg-purple-700 text-white">
+            <Download className="w-4 h-4 mr-2" />
+            Download as JSON
+          </Button>
+          <Button onClick={handleCopy} variant="outline" className="w-full border-purple-600 text-purple-600 hover:bg-purple-50">
+            <CheckCircle className="w-4 h-4 mr-2" />
+            Copy to Clipboard
+          </Button>
         </div>
-      </SheetContent>
-    </Sheet>
+      </DialogContent>
+    </Dialog>
   )
 }
 
 // Main App Component
 function App() {
-  const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0])
+  // State Management
+  const [startDate, setStartDate] = useState(new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0])
+  const [endDate, setEndDate] = useState(new Date().toISOString().split('T')[0])
   const [loading, setLoading] = useState(false)
   const [dashboardLoading, setDashboardLoading] = useState(false)
-  const [collectionStarted, setCollectionStarted] = useState(false)
+  const [refreshing, setRefreshing] = useState(false)
+
   const [teamData, setTeamData] = useState<TeamMember[]>([
-    { id: '1', name: 'Sarah Chen', activities: 'Led 3 webinars, attended 2 industry events', mqlCount: 12, status: 'responded', timestamp: '2024-01-15 10:30 AM' },
-    { id: '2', name: 'Marcus Johnson', activities: 'Published 5 thought leadership posts', mqlCount: 18, status: 'responded', timestamp: '2024-01-15 11:45 AM' },
-    { id: '3', name: 'Emily Rodriguez', activities: 'Conducted 4 product demos', mqlCount: 9, status: 'pending' },
-    { id: '4', name: 'James Park', activities: 'Managed 2 campaign launches', mqlCount: 15, status: 'responded', timestamp: '2024-01-15 09:15 AM' },
-    { id: '5', name: 'Lisa Chen', activities: 'Attended customer advisory board', mqlCount: 21, status: 'responded', timestamp: '2024-01-15 02:00 PM' },
+    { id: '1', name: 'Sarah Chen', email: 'sarah.chen@company.com', activities: 'Led 3 webinars, attended 2 industry events', mqlCount: 12, status: 'responded', timestamp: '2024-01-15 10:30 AM' },
+    { id: '2', name: 'Marcus Johnson', email: 'marcus.j@company.com', activities: 'Published 5 thought leadership posts, managed LinkedIn campaign', mqlCount: 18, status: 'responded', timestamp: '2024-01-15 11:45 AM' },
+    { id: '3', name: 'Emily Rodriguez', email: 'emily.r@company.com', activities: 'Conducted 4 product demos, organized roundtable', mqlCount: 9, status: 'pending' },
+    { id: '4', name: 'James Park', email: 'james.park@company.com', activities: 'Managed 2 campaign launches, optimized email sequences', mqlCount: 15, status: 'responded', timestamp: '2024-01-15 09:15 AM' },
+    { id: '5', name: 'Lisa White', email: 'lisa.w@company.com', activities: 'Attended customer advisory board, conducted partner outreach', mqlCount: 21, status: 'responded', timestamp: '2024-01-15 02:00 PM' },
+    { id: '6', name: 'David Kim', email: 'david.kim@company.com', activities: '', mqlCount: 0, status: 'overdue' },
   ])
 
-  const [insights, setInsights] = useState<DashboardInsight | null>(null)
+  const [dashboardData, setDashboardData] = useState<DashboardData | null>(null)
   const [collectionStatus, setCollectionStatus] = useState('')
+  const [errors, setErrors] = useState<string[]>([])
 
+  // Handlers
   const handleRequestUpdates = useCallback(async () => {
     setLoading(true)
-    setCollectionStatus('Initiating data collection...')
-    setCollectionStarted(true)
+    setCollectionStatus('Sending requests to team members...')
+    setErrors([])
 
     try {
-      const prompt = `Please collect weekly marketing activities and MQL data from our team members for the week of ${selectedDate}. Include activities and MQL counts for at least 5 team members.`
+      const prompt = `Collect weekly marketing activities and MQL data from team members for the period ${startDate} to ${endDate}. Request comprehensive information on activities performed, MQLs generated, and engagement metrics from at least 5 team members via email notifications.`
+
       const result = await callCollectionAgent(prompt)
 
       if (result) {
         setCollectionStatus(`✓ ${result.result}`)
 
-        // Simulate response reception with varying timestamps
+        // Simulate updates based on agent metadata
         const updatedTeamData = teamData.map((member, idx) => ({
           ...member,
-          status: idx < 4 ? 'responded' : 'pending',
-          timestamp: idx < 4 ? new Date(Date.now() - (idx * 15 * 60 * 1000)).toLocaleString() : undefined,
-          mqlCount: idx < 4 ? member.mqlCount : member.mqlCount
+          status: idx < 5 ? 'responded' : 'overdue',
+          timestamp: idx < 5 ? new Date(Date.now() - (idx * 15 * 60 * 1000)).toLocaleString() : undefined,
+          reminder_sent: idx >= 5 ? 1 : 0
         }))
         setTeamData(updatedTeamData)
+      } else {
+        setErrors(['Failed to initiate collection. Please try again.'])
+        setCollectionStatus('Error: Collection failed')
       }
     } catch (error) {
-      setCollectionStatus('Error during collection. Please try again.')
+      const errorMsg = error instanceof Error ? error.message : 'Unknown error occurred'
+      setErrors([errorMsg])
+      setCollectionStatus('Error during collection.')
       console.error(error)
     } finally {
       setLoading(false)
     }
-  }, [selectedDate, teamData])
+  }, [startDate, endDate, teamData])
 
   const handleGenerateDashboard = useCallback(async () => {
     setDashboardLoading(true)
+    setErrors([])
 
     try {
       const teamSummary = teamData
-        .map(m => `${m.name}: ${m.mqlCount} MQLs, Status: ${m.status}, Activities: ${m.activities}`)
+        .filter(m => m.status === 'responded')
+        .map(m => `${m.name}: ${m.mqlCount} MQLs, Activities: ${m.activities}`)
         .join('; ')
 
-      const prompt = `Generate dashboard insights from this team data: ${teamSummary}. Provide total MQLs, response rate percentage, average MQLs per person, top performer name, list of non-responders, and 3-4 key insights about team performance and trends.`
+      const prompt = `Generate comprehensive dashboard insights from this team marketing data for the period ${startDate} to ${endDate}: ${teamSummary}. Provide: total MQLs, team count, response rate percentage, average MQLs per person, top performer name, list of non-responders, and 4-5 actionable insights about team performance, trends, and recommendations.`
 
       const result = await callInsightsAgent(prompt)
 
@@ -305,75 +404,110 @@ function App() {
         const respondedCount = teamData.filter(m => m.status === 'responded').length
         const responseRate = Math.round((respondedCount / teamData.length) * 100)
         const totalMQLs = teamData.reduce((sum, m) => sum + m.mqlCount, 0)
-        const avgMQLs = Math.round(totalMQLs / respondedCount)
-        const topPerformer = teamData.reduce((max, m) => m.mqlCount > max.mqlCount ? m : max).name
-        const nonResponders = teamData.filter(m => m.status !== 'responded').map(m => m.name)
+        const avgMQLs = respondedCount > 0 ? Math.round(totalMQLs / respondedCount) : 0
+        const topPerformer = teamData.reduce((max, m) => m.mqlCount > max.mqlCount ? m : max, teamData[0])
+        const nonResponders = teamData.filter(m => m.status !== 'responded')
 
-        setInsights({
-          totalMQLs: result.metadata.total_mqls || totalMQLs,
-          responseRate,
-          averageMQLs: avgMQLs,
-          topPerformer,
-          nonResponders,
+        setDashboardData({
+          dashboard_status: 'ready',
+          aggregate_metrics: {
+            total_mqls: result.metadata.total_mqls || totalMQLs,
+            team_count: teamData.length,
+            response_rate: responseRate,
+            avg_mql_per_person: avgMQLs,
+            top_performer: topPerformer.name,
+            pending_responses: teamData.filter(m => m.status === 'pending').length
+          },
+          individual_activity_cards: teamData.filter(m => m.status === 'responded'),
+          non_responders_list: nonResponders.map(m => m.name),
           insights: [
-            'Team demonstrated strong engagement with 75% response rate',
-            'MQL generation improved 23% from last week',
-            'Top performer (Marcus) contributed 43% above team average',
-            'Recommended focus on engagement for non-respondents this week'
+            `Team achieved ${responseRate}% response rate with ${totalMQLs} total MQLs generated this period`,
+            `${topPerformer.name} is the top performer with ${topPerformer.mqlCount} MQLs (${Math.round((topPerformer.mqlCount / totalMQLs) * 100)}% of total)`,
+            `Average MQL contribution per responding member is ${avgMQLs} MQLs`,
+            `Recommended follow-up with ${nonResponders.length} team member(s) to ensure full engagement and participation next period`,
+            'Consider recognizing top performers and replicating their successful strategies across the team'
           ],
-          lastUpdated: new Date().toLocaleString()
+          metadata: {
+            processing_time: result.metadata.processing_time,
+            records_processed: result.metadata.records_processed
+          }
         })
+      } else {
+        setErrors(['Failed to generate dashboard. Please try again.'])
       }
     } catch (error) {
-      console.error('Dashboard generation error:', error)
+      const errorMsg = error instanceof Error ? error.message : 'Unknown error occurred'
+      setErrors([errorMsg])
+      console.error(error)
     } finally {
       setDashboardLoading(false)
     }
-  }, [teamData])
+  }, [teamData, startDate, endDate])
 
-  const handleExport = () => {
-    const dataStr = JSON.stringify({ teamData, insights }, null, 2)
-    const element = document.createElement('a')
-    element.setAttribute('href', 'data:text/plain;charset=utf-8,' + encodeURIComponent(dataStr))
-    element.setAttribute('download', `marketing-report-${selectedDate}.json`)
-    element.style.display = 'none'
-    document.body.appendChild(element)
-    element.click()
-    document.body.removeChild(element)
-  }
+  const handleRemind = useCallback((memberId: string) => {
+    setTeamData(prev =>
+      prev.map(member =>
+        member.id === memberId
+          ? { ...member, reminder_sent: (member.reminder_sent || 0) + 1 }
+          : member
+      )
+    )
+  }, [])
+
+  const handleRefresh = useCallback(async () => {
+    setRefreshing(true)
+    // Simulate refresh delay
+    await new Promise(resolve => setTimeout(resolve, 1000))
+    setRefreshing(false)
+  }, [])
 
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
-      <header className="bg-white border-b border-gray-200 sticky top-0 z-40">
+      <header className="bg-white border-b border-gray-200 sticky top-0 z-40 shadow-sm">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-4">
-              <div className="w-10 h-10 bg-purple-600 rounded-lg flex items-center justify-center">
+              <div className="w-10 h-10 bg-gradient-to-br from-purple-600 to-purple-700 rounded-lg flex items-center justify-center shadow-md">
                 <Target className="w-6 h-6 text-white" />
               </div>
               <div>
-                <h1 className="text-xl font-bold text-gray-900">Marketing Dashboard</h1>
-                <p className="text-xs text-gray-500">Weekly Activity & MQL Tracking</p>
+                <h1 className="text-2xl font-bold text-gray-900">Marketing Dashboard</h1>
+                <p className="text-sm text-gray-500">Team Performance & MQL Tracking System</p>
               </div>
             </div>
 
             <div className="flex items-center gap-3">
-              <Input
-                type="date"
-                value={selectedDate}
-                onChange={(e) => setSelectedDate(e.target.value)}
-                className="w-32 border-gray-300"
-              />
               <Button
                 variant="outline"
                 size="icon"
-                onClick={() => window.location.reload()}
-                className="border-gray-300"
+                onClick={handleRefresh}
+                disabled={refreshing}
+                className="border-gray-300 hover:bg-gray-100"
               >
-                <RefreshCw className="w-4 h-4" />
+                <RefreshCw className={cn('w-4 h-4', refreshing && 'animate-spin')} />
               </Button>
-              <SidePanel onExport={handleExport} />
+              <ExportDialog teamData={teamData} dashboardData={dashboardData} />
+            </div>
+          </div>
+
+          {/* Date Range Filter */}
+          <div className="flex items-center gap-4 bg-gray-50 p-3 rounded-lg border border-gray-200">
+            <div className="flex items-center gap-2">
+              <label className="text-sm font-medium text-gray-700">Date Range:</label>
+              <Input
+                type="date"
+                value={startDate}
+                onChange={(e) => setStartDate(e.target.value)}
+                className="w-32 text-sm border-gray-300"
+              />
+              <span className="text-gray-500">to</span>
+              <Input
+                type="date"
+                value={endDate}
+                onChange={(e) => setEndDate(e.target.value)}
+                className="w-32 text-sm border-gray-300"
+              />
             </div>
           </div>
         </div>
@@ -381,123 +515,195 @@ function App() {
 
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {/* Error Messages */}
+        {errors.length > 0 && (
+          <div className="mb-6 space-y-2">
+            {errors.map((error, idx) => (
+              <Alert key={idx} className="bg-red-50 border-red-200">
+                <XCircle className="h-4 w-4 text-red-600" />
+                <AlertDescription className="text-red-700">{error}</AlertDescription>
+              </Alert>
+            ))}
+          </div>
+        )}
+
         {/* CTA Section */}
         <div className="mb-8">
-          <Card className="bg-gradient-to-r from-purple-50 to-purple-100 border-purple-200">
+          <Card className="bg-gradient-to-r from-purple-50 via-purple-50 to-purple-100 border border-purple-200 shadow-md">
             <CardContent className="pt-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h2 className="text-lg font-semibold text-gray-900">Request Team Updates</h2>
-                  <p className="text-sm text-gray-600 mt-1">Collect weekly activities and MQL data from team members</p>
+              <div className="flex items-center justify-between gap-4">
+                <div className="flex-1">
+                  <h2 className="text-lg font-bold text-gray-900">Request Team Updates</h2>
+                  <p className="text-sm text-gray-600 mt-1">Send collection requests to team members and gather weekly activity & MQL data</p>
                 </div>
                 <Button
                   onClick={handleRequestUpdates}
                   disabled={loading}
-                  className="bg-purple-600 hover:bg-purple-700 text-white"
+                  className="bg-purple-600 hover:bg-purple-700 text-white shadow-md whitespace-nowrap"
                   size="lg"
                 >
-                  {loading ? 'Collecting...' : 'Request Updates'}
+                  {loading ? (
+                    <>
+                      <Clock className="w-4 h-4 mr-2 animate-spin" />
+                      Collecting...
+                    </>
+                  ) : (
+                    <>
+                      <Mail className="w-4 h-4 mr-2" />
+                      Request Updates
+                    </>
+                  )}
                 </Button>
               </div>
               {collectionStatus && (
-                <Alert className="mt-4 bg-white border-purple-200">
-                  <AlertCircle className="h-4 w-4" />
-                  <AlertDescription className="text-purple-700">{collectionStatus}</AlertDescription>
+                <Alert className={cn('mt-4', collectionStatus.includes('Error') ? 'bg-red-50 border-red-200' : 'bg-green-50 border-green-200')}>
+                  <AlertCircle className={cn('h-4 w-4', collectionStatus.includes('Error') ? 'text-red-600' : 'text-green-600')} />
+                  <AlertDescription className={collectionStatus.includes('Error') ? 'text-red-700' : 'text-green-700'}>
+                    {collectionStatus}
+                  </AlertDescription>
                 </Alert>
               )}
             </CardContent>
           </Card>
         </div>
 
-        {/* Tabs for different views */}
+        {/* Dashboard Tabs */}
         <Tabs defaultValue="overview" className="space-y-6">
-          <TabsList className="bg-white border border-gray-200">
-            <TabsTrigger value="overview">Overview</TabsTrigger>
-            <TabsTrigger value="team">Team Activity</TabsTrigger>
-            <TabsTrigger value="insights">Insights</TabsTrigger>
+          <TabsList className="bg-white border border-gray-200 shadow-sm">
+            <TabsTrigger value="overview" className="data-[state=active]:bg-purple-50">Overview</TabsTrigger>
+            <TabsTrigger value="team" className="data-[state=active]:bg-purple-50">Team Activity</TabsTrigger>
+            <TabsTrigger value="insights" className="data-[state=active]:bg-purple-50">Insights</TabsTrigger>
           </TabsList>
 
+          {/* Overview Tab */}
           <TabsContent value="overview" className="space-y-6">
-            {!insights ? (
-              <Card className="border-gray-200 text-center py-12">
+            {!dashboardData ? (
+              <Card className="border border-gray-200 shadow-sm text-center py-16">
                 <CardContent>
-                  <p className="text-gray-600 mb-4">Generate dashboard to see aggregate metrics</p>
+                  <Eye className="w-12 h-12 text-gray-300 mx-auto mb-4" />
+                  <p className="text-gray-600 mb-4 font-medium">No Dashboard Generated Yet</p>
+                  <p className="text-sm text-gray-500 mb-6">Click the button below to generate insights from collected team data</p>
                   <Button
                     onClick={handleGenerateDashboard}
-                    disabled={dashboardLoading}
+                    disabled={dashboardLoading || teamData.filter(m => m.status === 'responded').length === 0}
                     className="bg-purple-600 hover:bg-purple-700 text-white"
+                    size="lg"
                   >
-                    {dashboardLoading ? 'Generating...' : 'Generate Dashboard'}
+                    {dashboardLoading ? (
+                      <>
+                        <Clock className="w-4 h-4 mr-2 animate-spin" />
+                        Generating...
+                      </>
+                    ) : (
+                      'Generate Dashboard'
+                    )}
                   </Button>
                 </CardContent>
               </Card>
             ) : (
               <>
-                {/* Aggregate Metrics */}
+                {/* Aggregate Metrics Panel */}
                 <div>
-                  <h2 className="text-lg font-semibold text-gray-900 mb-4">Key Metrics</h2>
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                  <div className="flex items-center justify-between mb-4">
+                    <h2 className="text-lg font-bold text-gray-900">Aggregate Metrics</h2>
+                    <Button size="sm" variant="outline" onClick={handleGenerateDashboard} disabled={dashboardLoading}>
+                      Refresh
+                    </Button>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
                     <MetricCard
                       label="Total MQLs"
-                      value={insights.totalMQLs}
+                      value={dashboardData.aggregate_metrics.total_mqls}
                       icon={Target}
                       status="positive"
-                      trend="+23% from last week"
+                      trend="+18% vs last period"
+                    />
+                    <MetricCard
+                      label="Team Size"
+                      value={dashboardData.aggregate_metrics.team_count}
+                      icon={Users}
+                      status="neutral"
                     />
                     <MetricCard
                       label="Response Rate"
-                      value={`${insights.responseRate}%`}
-                      icon={Users}
+                      value={`${dashboardData.aggregate_metrics.response_rate}%`}
+                      icon={CheckCircle}
                       status="positive"
-                      trend="4% improvement"
+                      trend={dashboardData.aggregate_metrics.response_rate === 100 ? '✓ Perfect' : 'Good'}
                     />
                     <MetricCard
-                      label="Avg MQLs/Person"
-                      value={insights.averageMQLs}
+                      label="Avg MQL/Person"
+                      value={dashboardData.aggregate_metrics.avg_mql_per_person}
                       icon={TrendingUp}
                       status="neutral"
                     />
                     <MetricCard
-                      label="Top Performer"
-                      value={insights.topPerformer.split(' ')[0]}
-                      icon={CheckCircle}
-                      status="positive"
+                      label="Pending"
+                      value={dashboardData.aggregate_metrics.pending_responses}
+                      icon={Clock}
+                      status={dashboardData.aggregate_metrics.pending_responses === 0 ? 'positive' : 'pending'}
                     />
                   </div>
                 </div>
 
-                {/* Non-Responders & Insights */}
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                  <NonRespondersList members={insights.nonResponders} />
-                  <InsightsSummary insights={insights.insights} />
+                {/* Individual Activity Grid & Non-Responders */}
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                  <div className="lg:col-span-2">
+                    <h2 className="text-lg font-bold text-gray-900 mb-4">Team Activity</h2>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-h-96 overflow-y-auto">
+                      {dashboardData.individual_activity_cards.map((member) => (
+                        <ActivityCard key={member.id} member={member} onRemind={handleRemind} />
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="space-y-6">
+                    <NonRespondersList
+                      members={teamData.filter(m => m.status !== 'responded')}
+                      onRemind={handleRemind}
+                    />
+                    <InsightsSummary insights={dashboardData.insights.slice(0, 3)} />
+                  </div>
                 </div>
 
                 {/* Last Updated */}
-                <p className="text-xs text-gray-500 text-center">
-                  Last updated: {insights.lastUpdated}
-                </p>
+                <div className="text-center text-xs text-gray-500 border-t border-gray-200 pt-4">
+                  <p>Dashboard generated {dashboardData.metadata.processing_time} • {dashboardData.metadata.records_processed} records processed</p>
+                </div>
               </>
             )}
           </TabsContent>
 
+          {/* Team Activity Tab */}
           <TabsContent value="team" className="space-y-6">
             <div>
-              <h2 className="text-lg font-semibold text-gray-900 mb-4">Team Activity</h2>
+              <h2 className="text-lg font-bold text-gray-900 mb-4">All Team Members ({teamData.length})</h2>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                 {teamData.map((member) => (
-                  <TeamActivityCard key={member.id} member={member} />
+                  <ActivityCard key={member.id} member={member} onRemind={handleRemind} />
                 ))}
               </div>
             </div>
           </TabsContent>
 
+          {/* Insights Tab */}
           <TabsContent value="insights" className="space-y-6">
-            {insights ? (
-              <InsightsSummary insights={insights.insights} />
+            {dashboardData ? (
+              <div>
+                <h2 className="text-lg font-bold text-gray-900 mb-4">Performance Insights</h2>
+                <InsightsSummary insights={dashboardData.insights} />
+              </div>
             ) : (
-              <Card className="border-gray-200 text-center py-12">
+              <Card className="border border-gray-200 shadow-sm text-center py-12">
                 <CardContent>
-                  <p className="text-gray-600">Generate dashboard to view insights</p>
+                  <p className="text-gray-600 mb-4">Generate dashboard first to view insights and recommendations</p>
+                  <Button
+                    onClick={handleGenerateDashboard}
+                    disabled={dashboardLoading}
+                    className="bg-purple-600 hover:bg-purple-700 text-white"
+                  >
+                    Generate Dashboard
+                  </Button>
                 </CardContent>
               </Card>
             )}
