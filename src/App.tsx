@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Separator } from '@/components/ui/separator'
-import { RefreshCw, Download, AlertCircle, TrendingUp, Users, Target, CheckCircle, Mail, Clock, XCircle, Eye } from 'lucide-react'
+import { RefreshCw, Download, AlertCircle, TrendingUp, Users, Target, CheckCircle, Mail, Clock, XCircle, Eye, Plus, Trash2, Edit2 } from 'lucide-react'
 import parseLLMJson from '@/utils/jsonParser'
 import { callAIAgent } from '@/utils/aiAgent'
 import { cn } from '@/lib/utils'
@@ -328,6 +328,138 @@ function ExportDialog({ teamData, dashboardData }: any) {
   )
 }
 
+function TeamMemberDialog({ teamData, onAddMember, onDeleteMember, onEditMember }: any) {
+  const [open, setOpen] = useState(false)
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [formData, setFormData] = useState({
+    name: '',
+    email: ''
+  })
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!formData.name.trim() || !formData.email.trim()) {
+      alert('Please fill in all fields')
+      return
+    }
+
+    if (editingId) {
+      onEditMember(editingId, formData)
+      setEditingId(null)
+    } else {
+      onAddMember(formData)
+    }
+
+    setFormData({ name: '', email: '' })
+    setOpen(false)
+  }
+
+  const handleEdit = (member: TeamMember) => {
+    setEditingId(member.id)
+    setFormData({ name: member.name, email: member.email })
+  }
+
+  const handleCancel = () => {
+    setEditingId(null)
+    setFormData({ name: '', email: '' })
+    setOpen(false)
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button className="bg-purple-600 hover:bg-purple-700 text-white">
+          <Plus className="w-4 h-4 mr-2" />
+          Add Team Member
+        </Button>
+      </DialogTrigger>
+      <DialogContent className="max-w-2xl max-h-96">
+        <DialogHeader>
+          <DialogTitle>Manage Team Members</DialogTitle>
+          <DialogDescription>Add or edit team members for your marketing campaign</DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-4">
+          {/* Add/Edit Form */}
+          <form onSubmit={handleSubmit} className="space-y-4 p-4 bg-purple-50 rounded-lg border border-purple-200">
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="text-sm font-medium text-gray-700">Name</label>
+                <Input
+                  placeholder="John Doe"
+                  value={formData.name}
+                  onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                  className="mt-1 border-gray-300"
+                />
+              </div>
+              <div>
+                <label className="text-sm font-medium text-gray-700">Email</label>
+                <Input
+                  type="email"
+                  placeholder="john@company.com"
+                  value={formData.email}
+                  onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                  className="mt-1 border-gray-300"
+                />
+              </div>
+            </div>
+
+            <div className="flex gap-2">
+              <Button type="submit" className="bg-purple-600 hover:bg-purple-700 text-white">
+                {editingId ? 'Update Member' : 'Add Member'}
+              </Button>
+              {editingId && (
+                <Button type="button" variant="outline" onClick={handleCancel}>
+                  Cancel Edit
+                </Button>
+              )}
+            </div>
+          </form>
+
+          {/* Team Members List */}
+          <div>
+            <h3 className="font-semibold text-gray-900 mb-3">Current Team ({teamData.length})</h3>
+            <div className="max-h-48 overflow-y-auto space-y-2">
+              {teamData.map((member: TeamMember) => (
+                <div
+                  key={member.id}
+                  className={cn(
+                    'flex items-center justify-between p-3 rounded-lg border',
+                    editingId === member.id ? 'bg-purple-100 border-purple-400' : 'bg-white border-gray-200 hover:bg-gray-50'
+                  )}
+                >
+                  <div className="flex-1">
+                    <p className="font-medium text-gray-900">{member.name}</p>
+                    <p className="text-sm text-gray-500">{member.email}</p>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => handleEdit(member)}
+                      className="border-blue-600 text-blue-600 hover:bg-blue-50"
+                    >
+                      <Edit2 className="w-3 h-3" />
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => onDeleteMember(member.id)}
+                      className="border-red-600 text-red-600 hover:bg-red-50"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 // Main App Component
 function App() {
   // State Management
@@ -461,6 +593,38 @@ function App() {
     setRefreshing(false)
   }, [])
 
+  const handleAddMember = useCallback((formData: { name: string; email: string }) => {
+    const newMember: TeamMember = {
+      id: `member-${Date.now()}`,
+      name: formData.name,
+      email: formData.email,
+      activities: '',
+      mqlCount: 0,
+      status: 'pending',
+      timestamp: undefined,
+      reminder_sent: 0
+    }
+    setTeamData([...teamData, newMember])
+  }, [teamData])
+
+  const handleDeleteMember = useCallback((memberId: string) => {
+    setTeamData(teamData.filter(m => m.id !== memberId))
+    if (dashboardData) {
+      setDashboardData({
+        ...dashboardData,
+        individual_activity_cards: dashboardData.individual_activity_cards.filter(m => m.id !== memberId)
+      })
+    }
+  }, [teamData, dashboardData])
+
+  const handleEditMember = useCallback((memberId: string, formData: { name: string; email: string }) => {
+    setTeamData(teamData.map(m =>
+      m.id === memberId
+        ? { ...m, name: formData.name, email: formData.email }
+        : m
+    ))
+  }, [teamData])
+
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
@@ -478,6 +642,12 @@ function App() {
             </div>
 
             <div className="flex items-center gap-3">
+              <TeamMemberDialog
+                teamData={teamData}
+                onAddMember={handleAddMember}
+                onDeleteMember={handleDeleteMember}
+                onEditMember={handleEditMember}
+              />
               <Button
                 variant="outline"
                 size="icon"
